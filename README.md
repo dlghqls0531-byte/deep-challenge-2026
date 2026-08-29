@@ -6,6 +6,27 @@ Qwen2.5-3B-Instruct 베이스 모델로 정수 정답 수학 문제를 푸는 �
 
 ---
 
+## 0. 제출 구성 요약 (검증 담당자용)
+
+> **가중치 파일이 저장소에 없는 것이 정상입니다.**
+
+| 항목 | 내용 |
+|---|---|
+| 모델 | `Qwen/Qwen2.5-3B-Instruct` **원본 그대로** |
+| 파인튜닝 | **없음.** LoRA 어댑터, 추가 가중치 파일 일절 없음 |
+| 가중치 병합 | 없음 |
+| 성능 향상 요소 | **전적으로 추론 시점 기법** — 다중 라운드 생성 + 적응형 자기일관성 + 프롬프트 다양성 + 투표 |
+| 필요 하드웨어 | NVIDIA GPU 1장 (VRAM 16GB, T4 기준). **CPU 실행 불가** |
+| 2,000문제 소요 시간 | T4 1장 기준 **약 13시간** |
+
+개발 기간 중 LoRA 파인튜닝(외부 데이터 SFT, 자기출력 RFT, DPO)과 학습된 검증기를
+총 7회 시도했으나 **모두 베이스 모델보다 낮은 정확도**를 보여 최종 구성에서 제외했습니다.
+측정 결과는 7절에 정리했습니다.
+
+따라서 재현에 필요한 것은 **이 저장소의 코드 + HuggingFace 공개 베이스 모델** 둘뿐입니다.
+
+---
+
 ## 1. 규칙 준수
 
 | 항목 | 구현 |
@@ -38,8 +59,34 @@ peft 0.19.1          # 어댑터 미사용 구성에서는 불필요
 pip install -r requirements.txt
 ```
 
-GPU 16GB 1장 기준으로 동작합니다. `attn_implementation="sdpa"`, `float16` 고정입니다.
-(T4에서 bfloat16 은 에뮬레이션되어 약 10배 느리므로 사용하지 않습니다.)
+버전은 결과를 생성한 환경에 맞춰 고정했지만, 아래 조건만 만족하면 인접 버전에서도 동작합니다.
+
+- `transformers` — `AutoModelForCausalLM.from_pretrained` 의 `dtype` / `torch_dtype`
+  인자명 변경을 코드에서 둘 다 처리합니다 (4.x, 5.x 모두 가능)
+- `peft` — **최종 구성에서는 사용하지 않습니다.** `--adapter-dir` 옵션을 쓸 때만 필요
+- `torch` — CUDA 빌드 필요
+
+**GPU 필수입니다.** `device_map={"": 0}` 로 단일 GPU에 적재하며, CPU 전용 환경에서는
+실행되지 않습니다. VRAM 16GB(T4) 기준으로 검증했고, 모델 적재에 약 5.8GB,
+생성 시 KV 캐시를 포함해 최대 약 12GB를 사용합니다.
+
+`attn_implementation="sdpa"`, `float16` 고정입니다.
+(T4에서 bfloat16 은 에뮬레이션되어 약 10배 느려 사용하지 않습니다. eager attention 은
+fp16 + left padding 조합에서 출력이 붕괴하므로 sdpa 를 사용합니다.)
+
+### 소요 시간
+
+T4 1장, 기본 설정(`--k1 4 --k2 6`) 기준입니다.
+
+| 문제 수 | 생성 횟수 | 예상 시간 |
+|---|---|---|
+| 100 | 약 700 | 약 40분 |
+| 400 | 약 2,800 | 약 2.5시간 |
+| 2,000 | 약 14,000 | 약 13시간 |
+
+생성 1건당 약 3.2초입니다. `--k1`, `--k2` 를 줄이면 비례해서 짧아집니다.
+동작 확인만 하실 경우 `head -n 51 test.csv > small.csv` 로 50문제만 돌리시면
+약 20분에 끝납니다.
 
 ---
 
@@ -130,6 +177,29 @@ score(답) = (1/P) · Σ_prompt  [ 해당 프롬프트에서 그 답의 득표�
 ---
 
 ## 5. 재현성
+
+### 제출 답안을 만든 정확한 명령
+
+최종 제출본(`submission.csv`)은 아래 명령으로 생성했습니다.
+
+```bash
+# 8/31 최종 실행에 사용한 명령 — 제출 후 확정값으로 갱신
+python src/run_inference.py \
+    --test      test.csv \
+    --model-dir ./models/Qwen2.5-3B-Instruct \
+    --out       submission.csv \
+    --work      ./work \
+    --k1 4 --k2 6 \
+    --extra-prompts B,C,C2 \
+    --rounds 512 512 512 \
+    --temperature 0.8 --top-p 0.95 \
+    --batch-size 64 --token-budget 45000 \
+    --seed 42
+```
+
+`work/run_report.json` 에 실행 시점의 전체 인자와 통계가 기록됩니다.
+
+### 결정성의 범위
 
 생성은 `temperature=0.8`, `top_p=0.95` 샘플링을 사용합니다.
 `--seed` 로 `torch.manual_seed` / `torch.cuda.manual_seed_all` 을 고정하며,
