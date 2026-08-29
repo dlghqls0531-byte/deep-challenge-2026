@@ -220,14 +220,67 @@ work/run_report.json   실행 설정과 통계
 
 ---
 
-## 6. 파일 구성
+## 6. 제출 답안 검증 절차
+
+생성 단계는 온도 샘플링을 쓰므로 하드웨어가 다르면 토큰열이 달라집니다.
+그래서 검증을 **결정적인 부분**과 **근사 재현 부분**으로 나눠 제공합니다.
+
+### 6-1. 집계 재현 — 완전 결정적, GPU 불필요, 수 초
+
+제출한 답안이 후보들의 파싱값만으로 만들어졌음을 확인합니다.
+
+```bash
+python src/aggregate_only.py \
+    --candidates artifacts/candidates.csv \
+    --test       artifacts/test_ids.csv \
+    --out        /tmp/rebuilt.csv
+diff /tmp/rebuilt.csv artifacts/submission.csv     # 출력 없음 = 일치
+```
+
+`artifacts/candidates.csv` 는 (문제, 프롬프트, 샘플) 단위로 **모델이 생성한 텍스트에서
+추출한 정수 하나씩**을 담고 있습니다. 이 파일과 투표 코드만으로 제출본이 정확히
+재현된다는 것은, 답안의 출처가 모델 생성물뿐이며 정답 조회가 개입하지 않았음을 뜻합니다.
+
+### 6-2. 생성 재현 — 근사, GPU 필요
+
+```bash
+python src/run_inference.py --test artifacts/test_ids_with_questions.csv \
+    --model-dir ./models/Qwen2.5-3B-Instruct --out /tmp/regen.csv \
+    --work /tmp/regen_work --k1 4 --k2 4 --extra-prompts B,C,C2 --seed 42
+```
+
+같은 시드를 쓰지만 GPU 커널의 비결정성 때문에 개별 토큰까지 동일하지는 않습니다.
+문제별 정답률과 후보 분포가 `artifacts/run_report.json` 의 통계와 유사하면
+동일한 절차로 생성되었다고 볼 수 있습니다.
+
+### 6-3. 2단계 실행 기록
+
+최종 실행은 Kaggle 커밋의 12시간 제한 때문에 두 번에 나눠 수행했습니다.
+
+```
+1회차   --stage 1    전 문제 × k1 샘플 (프롬프트 A)
+2회차   --stage 2    1회차에서 만장일치가 아니었던 문제만 × k2 샘플 × B/C/C2
+```
+
+`candidates.csv` 에 이어붙이는 구조라 한 번에 실행한 것과 결과가 같습니다.
+`--stage all` 로 한 번에 돌려도 동일합니다.
+
+---
+
+## 7. 파일 구성
 
 ```
 ├── README.md
 ├── requirements.txt
 ├── download_model.sh          베이스 모델 다운로드
+├── artifacts/                 제출 답안 원본 + 재현용 중간 산출물
+│   ├── submission.csv         구글 폼에 제출한 답안
+│   ├── candidates.csv         문제·프롬프트·샘플별 파싱 결과
+│   ├── test_ids.csv           제출 순서 정의
+│   └── run_report.json        실행 인자와 통계
 └── src/
     ├── run_inference.py       단일 진입점 (test.csv → submission.csv)
+    ├── aggregate_only.py      candidates.csv → submission.csv (GPU 불필요)
     ├── prompts.py             프롬프트 A / B / C / C2 정의
     ├── mathx.py               답 추출, 종료 형태 판정
     └── genlib.py              다중 라운드 배치 생성 엔진 (OOM 자동 분할 포함)
@@ -235,7 +288,7 @@ work/run_report.json   실행 설정과 통계
 
 ---
 
-## 7. 개발 과정에서 확인한 것
+## 8. 개발 과정에서 확인한 것
 
 파이프라인 설계의 근거가 된 측정 결과입니다. (공개 리더보드 831문제 기준)
 

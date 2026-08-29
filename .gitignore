@@ -1,6 +1,6 @@
+# 실행 중 생성되는 작업 디렉터리 (artifacts/ 로 따로 커밋함)
 work/
 *.zip
 __pycache__/
 .ipynb_checkpoints/
-submission*.csv
 models/
