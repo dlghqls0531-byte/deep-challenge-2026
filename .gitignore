@@ -1,0 +1,6 @@
+work/
+*.zip
+__pycache__/
+.ipynb_checkpoints/
+submission*.csv
+models/
