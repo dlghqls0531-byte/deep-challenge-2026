@@ -54,6 +54,20 @@ def set_prompt(name: str) -> None:
     mathx.PROMPT_USER = user
 
 
+def prompt_seed(base: int, name: str) -> int:
+    """A distinct RNG stream per prompt.
+
+    Prompt diversity only helps if the prompts sample independently, so every
+    registered prompt gets its own seed block.  Deriving the offset from the
+    first character gives ``C`` and ``C2`` the same stream; the position in the
+    sorted registry keeps them apart.  The block size (1e6) is far larger than
+    any chunk offset, so the streams cannot overlap.
+    """
+    order = sorted(prompts.REGISTRY)
+    index = order.index(name) if name in order else len(order)
+    return base + 1_000_000 * (index + 1)
+
+
 def load_model(model_dir: str, dtype: str):
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -246,7 +260,7 @@ def main() -> None:
             todo = hard[~hard["id"].isin(done)].reset_index(drop=True)
             log(f"  prompt {name} x{args.k2} on {len(todo)} problems")
             generate_stage(model, tok, todo, name, args.k2, args, cand_csv,
-                           args.seed + 1000 * (ord(name[0]) - 64))
+                           prompt_seed(args.seed, name))
             cands = load_candidates()
             write_submission(cands, test, args.out)
 
