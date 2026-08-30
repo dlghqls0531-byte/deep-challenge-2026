@@ -180,22 +180,57 @@ score(답) = (1/P) · Σ_prompt  [ 해당 프롬프트에서 그 답의 득표�
 
 ### 제출 답안을 만든 정확한 명령
 
-최종 제출본(`submission.csv`)은 아래 명령으로 생성했습니다.
+Kaggle 커밋의 12시간 제한 때문에 두 번에 나눠 실행했습니다. 두 명령 모두 같은
+`--work` 디렉터리를 사용하며, 2회차는 1회차가 남긴 `candidates.csv` 를 이어받습니다.
 
 ```bash
-# 8/31 최종 실행에 사용한 명령 — 제출 후 확정값으로 갱신
+# 1회차 — 전 문제 × 프롬프트 A × 3샘플
 python src/run_inference.py \
     --test      test.csv \
     --model-dir ./models/Qwen2.5-3B-Instruct \
     --out       submission.csv \
     --work      ./work \
-    --k1 4 --k2 6 \
-    --extra-prompts B,C,C2 \
-    --rounds 512 512 512 \
-    --temperature 0.8 --top-p 0.95 \
-    --batch-size 64 --token-budget 45000 \
+    --k1 3 --k2 3 --extra-prompts B,C,C2 \
+    --stage 1 \
+    --seed 42
+
+# 2회차 — 1회차에서 만장일치가 아니었던 문제만 × B·C·C2 × 3샘플
+python src/run_inference.py \
+    --test      test.csv \
+    --model-dir ./models/Qwen2.5-3B-Instruct \
+    --out       submission.csv \
+    --work      ./work \
+    --k1 3 --k2 3 --extra-prompts B,C,C2 \
+    --chunk 150 \
+    --stage all \
     --seed 42
 ```
+
+명시하지 않은 인자는 기본값입니다
+(`--rounds 512 512 512`, `--temperature 0.8`, `--top-p 0.95`,
+`--batch-size 64`, `--token-budget 45000`, `--dtype float16`).
+1회차는 `--chunk` 를 지정하지 않아 기본값 50 을 사용했습니다.
+
+> **`--chunk` 는 결과에 영향을 줍니다.** 배치 크기뿐 아니라 청크 오프셋이
+> 시드 파생(`seed = seed_base + start`)에 들어가므로, 값이 다르면 뽑히는 표본이
+> 달라집니다. 절차와 기대 성능은 같지만 동일한 답안을 얻으려면 위 값 그대로
+> 사용해야 합니다. 2회차에서 150 으로 올린 이유는 `k2=3` 에서 배치가 덜 차
+> 처리량이 떨어졌기 때문입니다.
+
+한 번에 실행할 수도 있습니다. 이 경우 `--chunk` 가 전 구간에 동일하게 적용되므로
+표본은 달라지지만 절차는 같습니다.
+
+```bash
+python src/run_inference.py --test test.csv \
+    --model-dir ./models/Qwen2.5-3B-Instruct --out submission.csv --work ./work \
+    --k1 3 --k2 3 --extra-prompts B,C,C2 --stage all --seed 42
+```
+
+> **모델 경로.** 실제 실행 환경(Kaggle)에서는 `--model-dir /kaggle/working/qwen_base`
+> 를 사용했습니다. `download_model.sh` 가 받는 파일 목록과 동일하므로
+> (`config.json`, `generation_config.json`, `model-0000{1,2}-of-00002.safetensors`,
+> `model.safetensors.index.json`, `tokenizer.json`, `tokenizer_config.json`,
+> `vocab.json`, `merges.txt`) 경로만 바꿔 쓰면 됩니다.
 
 `work/run_report.json` 에 실행 시점의 전체 인자와 통계가 기록됩니다.
 
@@ -205,7 +240,9 @@ python src/run_inference.py \
 `--seed` 로 `torch.manual_seed` / `torch.cuda.manual_seed_all` 을 고정하며,
 배치 구성도 입력에 대해 결정적입니다. 다만 GPU 커널의 비결정성 때문에
 서로 다른 하드웨어에서 완전히 동일한 토큰열이 나온다고 보장하기는 어렵습니다.
-집계 단계(투표)는 후보가 주어지면 완전히 결정적입니다.
+
+**집계 단계(투표)는 후보가 주어지면 완전히 결정적입니다.** 그래서 6절의 검증은
+이 결정적인 부분을 근거로 삼습니다.
 
 중간 산출물은 `--work` 디렉터리에 남습니다.
 
@@ -241,29 +278,58 @@ diff /tmp/rebuilt.csv artifacts/submission.csv     # 출력 없음 = 일치
 추출한 정수 하나씩**을 담고 있습니다. 이 파일과 투표 코드만으로 제출본이 정확히
 재현된다는 것은, 답안의 출처가 모델 생성물뿐이며 정답 조회가 개입하지 않았음을 뜻합니다.
 
-### 6-2. 생성 재현 — 근사, GPU 필요
+### 6-2. 제출 파일과의 대조
+
+구글 폼에는 주최 측이 배포한 `test_submission.csv` 의 `answer` 열을 채워 제출했습니다.
+그 파일도 `artifacts/test_submission.csv` 로 함께 커밋했습니다. 두 파일의 관계는
+`id` 기준 1:1 이며, 아래로 확인할 수 있습니다.
 
 ```bash
-python src/run_inference.py --test artifacts/test_ids_with_questions.csv \
+python - <<'PY'
+import pandas as pd
+sub = pd.read_csv("artifacts/submission.csv")          # id, answer
+fin = pd.read_csv("artifacts/test_submission.csv")     # id, question, answer
+sub["id"] = sub["id"].astype(str); fin["id"] = fin["id"].astype(str)
+m = fin.merge(sub, on="id", suffixes=("_final", "_agg"))
+print("행 수      ", len(fin), len(sub), len(m))
+print("답 불일치  ", int((m["answer_final"] != m["answer_agg"]).sum()))
+print("정수 아닌 행", int((~fin["answer"].astype(str).str.fullmatch(r"-?\d+")).sum()))
+PY
+```
+
+`답 불일치 0`, `정수 아닌 행 0` 이면 제출 파일이 6-1 의 재현 결과와 동일합니다.
+
+### 6-3. 생성 재현 — 근사, GPU 필요
+
+주최 측이 배포한 `test_submission.csv` 에서 `id`·`question` 두 열만 남긴 파일을
+`test.csv` 로 만든 뒤, 5절의 명령을 그대로 실행하면 됩니다.
+(저장소는 테스트 문제 본문을 재배포하지 않으므로 원본 배포 파일이 필요합니다.)
+
+```bash
+python - <<'PY'
+import pandas as pd
+raw = pd.read_csv("test_submission.csv")
+raw[["id", "question"]].to_csv("test.csv", index=False)   # answer 열은 사용하지 않음
+PY
+
+python src/run_inference.py --test test.csv \
     --model-dir ./models/Qwen2.5-3B-Instruct --out /tmp/regen.csv \
-    --work /tmp/regen_work --k1 4 --k2 4 --extra-prompts B,C,C2 --seed 42
+    --work /tmp/regen_work --k1 3 --k2 3 --extra-prompts B,C,C2 --stage all --seed 42
 ```
 
 같은 시드를 쓰지만 GPU 커널의 비결정성 때문에 개별 토큰까지 동일하지는 않습니다.
-문제별 정답률과 후보 분포가 `artifacts/run_report.json` 의 통계와 유사하면
-동일한 절차로 생성되었다고 볼 수 있습니다.
+프롬프트별 파싱률·완결률·평균 토큰 수가 `artifacts/run_report.json` 및 8-5 의 통계와
+비슷하면 동일한 절차로 생성되었다고 볼 수 있습니다.
 
-### 6-3. 2단계 실행 기록
+### 6-4. 2단계 실행 기록
 
-최종 실행은 Kaggle 커밋의 12시간 제한 때문에 두 번에 나눠 수행했습니다.
+`candidates.csv` 에 이어붙이는 구조이고 재개 단위가 (문제, 프롬프트) 이므로,
+2회차 실행은 1회차가 이미 만든 프롬프트 A 후보를 다시 생성하지 않습니다.
+2회차 로그의 첫 줄이 이를 보여줍니다.
 
 ```
-1회차   --stage 1    전 문제 × k1 샘플 (프롬프트 A)
-2회차   --stage 2    1회차에서 만장일치가 아니었던 문제만 × k2 샘플 × B/C/C2
+[stage 1] prompt A x3 on 0 problems (2000 already done)
 ```
-
-`candidates.csv` 에 이어붙이는 구조라 한 번에 실행한 것과 결과가 같습니다.
-`--stage all` 로 한 번에 돌려도 동일합니다.
 
 ---
 
@@ -274,7 +340,8 @@ python src/run_inference.py --test artifacts/test_ids_with_questions.csv \
 ├── requirements.txt
 ├── download_model.sh          베이스 모델 다운로드
 ├── artifacts/                 제출 답안 원본 + 재현용 중간 산출물
-│   ├── submission.csv         구글 폼에 제출한 답안
+│   ├── test_submission.csv    구글 폼에 제출한 파일 (id, question, answer)
+│   ├── submission.csv         집계 결과 (id, answer) — 6-1 대조 대상
 │   ├── candidates.csv         문제·프롬프트·샘플별 파싱 결과
 │   ├── test_ids.csv           제출 순서 정의
 │   └── run_report.json        실행 인자와 통계
