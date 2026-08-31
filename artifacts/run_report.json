@@ -1,0 +1,28 @@
+{
+  "n_problems": 2000,
+  "n_candidates": 11868,
+  "config": {
+    "test": "/kaggle/working/test.csv",
+    "model_dir": "/kaggle/working/qwen_base",
+    "out": "/kaggle/working/submission.csv",
+    "work": "/kaggle/working/work",
+    "adapter_dir": null,
+    "k1": 3,
+    "k2": 3,
+    "extra_prompts": "B,C2",
+    "rounds": [
+      512,
+      512,
+      512
+    ],
+    "batch_size": 64,
+    "token_budget": 45000,
+    "max_input": 1792,
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "chunk": 150,
+    "dtype": "float16",
+    "seed": 42,
+    "stage": "all"
+  }
+}
