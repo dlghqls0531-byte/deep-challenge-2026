@@ -180,59 +180,47 @@ score(답) = (1/P) · Σ_prompt  [ 해당 프롬프트에서 그 답의 득표�
 
 ### 제출 답안을 만든 정확한 명령
 
-Kaggle 커밋의 12시간 제한 때문에 두 번에 나눠 실행했습니다. 두 명령 모두 같은
-`--work` 디렉터리를 사용하며, 2회차는 1회차가 남긴 `candidates.csv` 를 이어받습니다.
+Kaggle 커밋 1회의 12시간 상한 때문에 실행을 둘로 나눴습니다. 두 실행 모두 같은
+`--work` 디렉터리를 쓰며, 2회차는 1회차가 남긴 `candidates.csv` 를 이어받습니다.
 
 ```bash
-# 1회차 — 전 문제 × 프롬프트 A × 3샘플
-python src/run_inference.py \
-    --test      test.csv \
-    --model-dir ./models/Qwen2.5-3B-Instruct \
-    --out       submission.csv \
-    --work      ./work \
-    --k1 3 --k2 3 --extra-prompts B,C,C2 \
-    --stage 1 \
-    --seed 42
+# 1회차 — 전 문제(2,000) × 프롬프트 A × 3샘플.  6,000후보 / 5.1h
+#         --stage 1 이므로 --extra-prompts 는 사용되지 않습니다.
+#         --chunk 미지정 → 기본값 50
+python src/run_inference.py --test test.csv \
+    --model-dir ./models/Qwen2.5-3B-Instruct --out submission.csv --work ./work \
+    --k1 3 --k2 3 --extra-prompts B,C,C2 --stage 1 --seed 42
 
-# 2회차 — 1회차에서 만장일치가 아니었던 문제만 × B·C·C2 × 3샘플
-python src/run_inference.py \
-    --test      test.csv \
-    --model-dir ./models/Qwen2.5-3B-Instruct \
-    --out       submission.csv \
-    --work      ./work \
-    --k1 3 --k2 3 --extra-prompts B,C,C2 \
-    --chunk 150 \
-    --stage all \
-    --seed 42
+# 2회차 — 1회차에서 만장일치가 아니었던 978문제 × B·C2 × 3샘플.  5,868후보 / 6.4h
+python src/run_inference.py --test test.csv \
+    --model-dir ./models/Qwen2.5-3B-Instruct --out submission.csv --work ./work \
+    --k1 3 --k2 3 --extra-prompts B,C2 --chunk 150 --stage all --seed 42
 ```
 
-명시하지 않은 인자는 기본값입니다
-(`--rounds 512 512 512`, `--temperature 0.8`, `--top-p 0.95`,
-`--batch-size 64`, `--token-budget 45000`, `--dtype float16`).
-1회차는 `--chunk` 를 지정하지 않아 기본값 50 을 사용했습니다.
+명시하지 않은 인자는 기본값입니다 (`--rounds 512 512 512`, `--temperature 0.8`,
+`--top-p 0.95`, `--batch-size 64`, `--token-budget 45000`, `--dtype float16`).
+`artifacts/run_report.json` 에 2회차 시점의 전체 인자가 그대로 기록되어 있습니다.
+
+> **2회차에서 프롬프트 C 를 제외했습니다.** 잔여 GPU 할당이 9시간 26분인데
+> `B,C,C2` 는 8시간 56분을 요구해 여유가 6%뿐이었습니다. 할당이 도중에 소진되면
+> 커밋이 실패해 산출물이 남지 않으므로, 프롬프트 하나를 줄여 6시간 21분에
+> 맞췄습니다.
+>
+> C 를 고른 근거는 **테스트셋 공개 이전의 리허설 측정**입니다. 8-5절의 배분 정책
+> 비교에서 `B+C2`·`B+C`·`B+C+C2` 가 0.7525 로 동점이었고, C 의 완결률이 0.55 로
+> 생성의 45%가 버려지고 있었습니다. C2 는 C 의 형식 지시를 시스템 메시지로 옮겨
+> 고친 버전이며 완결률이 0.98 입니다. 테스트셋을 보고 정한 값이 아닙니다.
 
 > **`--chunk` 는 결과에 영향을 줍니다.** 배치 크기뿐 아니라 청크 오프셋이
 > 시드 파생(`seed = seed_base + start`)에 들어가므로, 값이 다르면 뽑히는 표본이
-> 달라집니다. 절차와 기대 성능은 같지만 동일한 답안을 얻으려면 위 값 그대로
-> 사용해야 합니다. 2회차에서 150 으로 올린 이유는 `k2=3` 에서 배치가 덜 차
-> 처리량이 떨어졌기 때문입니다.
-
-한 번에 실행할 수도 있습니다. 이 경우 `--chunk` 가 전 구간에 동일하게 적용되므로
-표본은 달라지지만 절차는 같습니다.
-
-```bash
-python src/run_inference.py --test test.csv \
-    --model-dir ./models/Qwen2.5-3B-Instruct --out submission.csv --work ./work \
-    --k1 3 --k2 3 --extra-prompts B,C,C2 --stage all --seed 42
-```
+> 달라집니다. 절차와 기대 성능은 같지만 동일한 답안을 얻으려면 위 값을 그대로
+> 사용해야 합니다.
 
 > **모델 경로.** 실제 실행 환경(Kaggle)에서는 `--model-dir /kaggle/working/qwen_base`
 > 를 사용했습니다. `download_model.sh` 가 받는 파일 목록과 동일하므로
 > (`config.json`, `generation_config.json`, `model-0000{1,2}-of-00002.safetensors`,
 > `model.safetensors.index.json`, `tokenizer.json`, `tokenizer_config.json`,
 > `vocab.json`, `merges.txt`) 경로만 바꿔 쓰면 됩니다.
-
-`work/run_report.json` 에 실행 시점의 전체 인자와 통계가 기록됩니다.
 
 ### 결정성의 범위
 
@@ -314,7 +302,7 @@ PY
 
 python src/run_inference.py --test test.csv \
     --model-dir ./models/Qwen2.5-3B-Instruct --out /tmp/regen.csv \
-    --work /tmp/regen_work --k1 3 --k2 3 --extra-prompts B,C,C2 --stage all --seed 42
+    --work /tmp/regen_work --k1 3 --k2 3 --extra-prompts B,C2 --stage all --seed 42
 ```
 
 같은 시드를 쓰지만 GPU 커널의 비결정성 때문에 개별 토큰까지 동일하지는 않습니다.
@@ -455,3 +443,111 @@ HELDOUT 0.7525 와 리더보드 0.78580 의 차이는 예산 차이입니다. �
 정렬된 레지스트리에서의 위치로 시드 블록을 나누는 `prompt_seed()` 를 도입했습니다
 (`src/run_inference.py`). 1단계(프롬프트 A)의 시드는 그대로 두어 리허설 측정값과의
 대응을 유지했습니다.
+
+---
+
+### 8-7. 자원 배분과 이 제출물의 성격
+
+이 대회가 요구한 것은 베이스 모델의 성능 개선이고, 그 정공법은 학습입니다.
+**저희는 그 축에서 성공하지 못했습니다.** 최종 제출물의 성능 향상은 전부 추론
+시점 기법에서 나왔고, 가중치는 한 글자도 바뀌지 않았습니다.
+
+| 축 | GPU 시간 | 성과 |
+|---|---|---|
+| 진단 · 버그 수정 | 약 10h | **+14.0%p** (DEV 200) |
+| 추론 파이프라인 | 약 30h | **+8.4%p** (리더보드 831) |
+| 학습 · 검증기 | 약 35h | **0** |
+
+Kaggle 의 주당 GPU 할당은 30시간입니다. 학습 1회가 4~6시간이었으므로 학습을 돌린
+주에는 추론 실험을 거의 돌리지 못했고, 세 축을 병렬로 두지 못한 채 직렬로 진행할
+수밖에 없었습니다. 학습이 0으로 끝난 뒤 남은 예산을 전부 추론에 투입했고,
+적응형 배분과 프롬프트 다양성은 그 결과물입니다.
+
+측정이 가리키는 다음 실험은 **길이 보존 제약 SFT** 입니다. 8-3 의 대규모 SFT 는
+정확도가 아니라 생성 길이가 먼저 붕괴했고(468 → 337 토큰), 외부 풀이의 중앙값이
+250토큰이라는 데이터 속성이 원인이었습니다. 길이를 손실 항으로 억제하면 그 기전을
+직접 차단할 수 있습니다. 학습 6h + 검증 1h 이 필요했는데, 모델 개발 마감 전날
+남은 할당으로 시도하면 최종 추론(2,000문제 약 11.5h)이 위태로워져 착수하지
+않았습니다.
+
+저희가 남긴 것은 "파인튜닝이 통하지 않는다" 가 아니라 **"이 방식은 이 기전으로
+실패한다"** 는 측정 기록입니다. 학습 축에서의 성과는 0이지만, 다음 시도가 어디서
+시작해야 하는지는 특정했습니다.
+
+## 9. 재현 기록 (2026-08-31)
+
+운영진 안내에 따라 **재현성 확보와 문서화 목적의 수정**만 반영한 절입니다.
+추론 결과를 바꾸는 변경(프롬프트·후처리·샘플링 인자·가중치)은 하지 않았습니다.
+
+### 9-1. 소스 코드는 모델 개발 마감 이후 변경되지 않았습니다
+
+```bash
+git diff 18b7485 HEAD -- src/     # 빈 출력
+```
+
+`18b7485` 는 **2026-08-30 11:05** 커밋으로, 모델 개발 마감(8/30 23:59) 이전입니다.
+채택한 추론 구성(`k1=3`, `k2=3`)은 그 커밋의 8-5절에 이미 기재되어 있으며,
+테스트셋 공개 전 홀드아웃 400문제 리허설로 정한 값입니다.
+
+이후 커밋은 문서와 산출물만 건드렸습니다.
+
+| 커밋 | 시각 | 변경 범위 |
+|---|---|---|
+| `18b7485` | 2026-08-30 11:05 | 마지막 코드 커밋 |
+| `d50d219` | 2026-08-31 00:46 | `README.md`, `artifacts/README.md` |
+| `fb542b2` | 2026-08-31 17:0x | `artifacts/` 데이터 5개 |
+
+### 9-2. SHA-256
+
+```
+# src/  — 8/30 11:05 이후 동일
+765b39cd2706667e530362cfdc6e3a2ab4e36577123f215201cb947d9aa683cc  src/aggregate_only.py
+297f15183727116ff1f1ec0d869ab958dccc4be281f228ab8ee849c8245093b8  src/genlib.py
+a7a231d34481db631e25232eded993b9ab01ba34348bfd091156244cb818b74b  src/mathx.py
+68814036c3da33ec64ae7f40bba652e7ae50243d506dbcc931ca615e2b892021  src/prompts.py
+7ecae62f103052cb70e187fdcd36c0db6dac5f880ad52afc6552960ec87eea18  src/run_inference.py
+
+# 환경
+70c8e603750d836c04101a33212a7387ee195ecd65f4c9ae53bd8e884350dfe4  requirements.txt
+9a8a7a3d1167d108b9317d7a8dd6f0e3a13574b388e301d758a1ee528c48fe0f  download_model.sh
+
+# artifacts/  — 최종 실행 산출물
+32d291b0f0498ddfacce2403399d6ba881e27a3829368fcf086d83a3d3213180  artifacts/candidates.csv
+c3af1aa044d6f69c3d21ec79d3647fb2173adb7ec1b723473731629f48b120f7  artifacts/run_report.json
+fcf5bde6970c4bc80dfc1408a44b1853c4be3a027277979d7cd0a60b33a0aecb  artifacts/submission.csv
+7c24546c9642ced0f39570558b2b3f2944a97394b475500ea2327e8298f90d3c  artifacts/test_ids.csv
+cab4ae78c22f39dd7ea29692b390716b4e2f256be258b665ed6dacfa9e61585e  artifacts/test_submission.csv
+```
+
+베이스 모델은 `Qwen/Qwen2.5-3B-Instruct` 를 HuggingFace 에서 그대로 받아 사용했으며,
+어댑터·병합·양자화가 없으므로 별도 가중치 해시는 없습니다
+(`artifacts/run_report.json` 의 `adapter_dir` 가 `null` 입니다).
+
+### 9-3. 실행 기록
+
+| 항목 | 값 |
+|---|---|
+| 테스트셋 | 2,000문제 (`test-0000` ~ `test-1999`) |
+| 하드웨어 | NVIDIA T4 1장 (Kaggle) |
+| 총 후보 | 11,868개 = 문제당 5.9개 |
+| 총 소요 | 11.5h (1회차 5.1h + 2회차 6.4h) |
+| 종료 코드 | 0 |
+| `fallback` | 1회차 2건 → 최종 **0건** |
+
+프롬프트별 거동입니다.
+
+| 프롬프트 | 후보 | 파싱 | 완결(`clean_final`) |
+|---|---|---|---|
+| A | 6,000 | 0.9963 | 0.8933 |
+| B | 2,934 | 0.9932 | 0.7822 |
+| C2 | 2,934 | 0.9976 | 0.9847 |
+
+`k=3` 만장일치로 조기 종료된 문제가 1,022 / 2,000 (51.1%) 이고, 나머지 978문제에
+2단계 예산이 투입되었습니다.
+
+### 9-4. 결정적 재현 확인
+
+6-1 의 절차를 실행하면 `artifacts/candidates.csv` 만으로 `artifacts/submission.csv`
+가 정확히 재현됩니다. 제출 직전 별도 구현으로 교차 검증했으며 2,000문제 전부
+일치했고, `fallback` 이 적용된 행은 0개였습니다. 즉 제출한 모든 답이 모델 생성
+텍스트에서 추출된 정수입니다.
